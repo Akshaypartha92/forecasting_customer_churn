@@ -21,4 +21,18 @@ Churned_MonthX: Binary target indicating whether the customer churned in the cur
 
 ## Data processing
 
+#### 1. encode all the variables
+
+#### 2. eda of in which month customers were churning the most? any seasonality.
+
+#### 3. PCA to find correlation of the variable - part of feature engineering.
+
+#### 4. Replace UsageData & BillingAmount NaNs with the mean of contractType of that column.
+
+#### 5. Binning of the demographic columns, age & Income.
+
+#### 6. assign churn risk score probability from 0-100%.
+
+#### 7. Binning of churn prediction
+
 
