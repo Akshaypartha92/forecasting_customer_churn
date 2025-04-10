@@ -18,3 +18,7 @@ Gender: Gender of the customer (Male, Female).
 Income: Annual income of the customer.
 HouseholdSize: Number of people in the customer's household.
 Churned_MonthX: Binary target indicating whether the customer churned in the current month (0: stayed, 1: churned).
+
+## Data processing
+
+
