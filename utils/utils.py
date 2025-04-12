@@ -1,6 +1,8 @@
-import pandas as pd
 import os
 import glob
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 def loader_processor_single_f(filepath):
     """
@@ -28,3 +30,25 @@ def load_raw_data(raw_folder_path):
 
     dataframes = list(map(loader_processor_single_f, file_paths))
     return pd.concat(dataframes, ignore_index=True)
+
+def plot_feature_comparison(df, x_col, y_col, palette=['#F08080', '#20B2AA']):
+    """
+    Plots a comparison bar chart showing the average of y_col grouped by x_col.
+    
+    """
+    group_avg = df.groupby(x_col)[y_col].mean().reset_index()
+
+    plt.figure(figsize=(7, 5))
+    sns.barplot(data=group_avg, x=x_col, y=y_col, palette=palette)
+    
+    # Add value labels
+    for i, val in enumerate(group_avg[y_col]):
+        label = f"${val:.2f}" if 'amount' in y_col.lower() or 'charge' in y_col.lower() else f"{val:.0f} months"
+        plt.text(i, val + (val * 0.02), label, ha='center')
+    
+    # Titles and labels
+    plt.title(f"Average {y_col} by {x_col}")
+    plt.ylabel(y_col)
+    plt.xlabel(x_col)
+    plt.tight_layout()
+    plt.show()
