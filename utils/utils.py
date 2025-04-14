@@ -3,12 +3,14 @@ import glob
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 from sklearn.impute import KNNImputer
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from imblearn.over_sampling import SMOTE
 from imblearn.combine import SMOTETomek
+from imblearn.under_sampling import ClusterCentroids
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -71,7 +73,7 @@ def plot_feature_comparison(df, x_col, y_col, palette=['#F08080', '#20B2AA']):
     plt.tight_layout()
     plt.show()
 
-def apply_smote(X, y, scale=False, tomek=False, sampling_strategy=0.3):
+def apply_smote(X, y, excluded_from_scaling, scale=False, smote=False, tomek=False, cube=False, sampling_strategy=0.5):
     """
     Applies SMOTE to balance the target classes, specially in our case 
     as our data has only 10% of the churned users & overall sample size is minimal
@@ -86,18 +88,40 @@ def apply_smote(X, y, scale=False, tomek=False, sampling_strategy=0.3):
     - X_resampled (np.ndarray or DataFrame): Balanced features.
     - y_resampled (np.ndarray or Series): Balanced target.
     """
+    if excluded_from_scaling is None:
+        excluded_from_scaling = []
+
     if scale:
         scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+
+        # Split into scale + exclude subsets
+        X_to_scale = X.drop(columns=excluded_from_scaling)
+        X_excluded = X[excluded_from_scaling]
+
+        # Scale selected columns
+        X_scaled_part = pd.DataFrame(
+            scaler.fit_transform(X_to_scale),
+            columns=X_to_scale.columns,
+            index=X_to_scale.index
+        )
+
+        # Rejoin scaled and unscaled features
+        X_scaled = pd.concat([X_scaled_part, X_excluded], axis=1)
+
     else:
         X_scaled = X
 
+    # Oversampling using tomek or smote
     if tomek:
         smote_tomek = SMOTETomek(random_state=42, sampling_strategy=sampling_strategy) # Adding sampling strategy
         X_resampled, y_resampled = smote_tomek.fit_resample(X_scaled, y)
-    else:
+    elif smote:
         smote = SMOTE(random_state=42, sampling_strategy=sampling_strategy)
         X_resampled, y_resampled = smote.fit_resample(X_scaled, y)
+    elif cube:
+        #undersampling using ClusterCentroids
+        cube = ClusterCentroids(sampling_strategy=sampling_strategy, random_state=42)  # Keep minority at 50% of majority
+        X_resampled, y_resampled = cube.fit_resample(X_scaled, y)
 
     return X_resampled, y_resampled
 
@@ -145,7 +169,7 @@ def split_data(df, target, test_size=0.2, stratify=True, scale=False, pca=False,
 
     # Optional PCA
     if pca:
-        pca_model = PCA(n_components=pca_variance)
+        pca_model = PCA(n_components=15)
         X_train_pca = pca_model.fit_transform(X_train_pca_input)
         X_test_pca = pca_model.transform(X_test_pca_input)
 
@@ -161,43 +185,6 @@ def split_data(df, target, test_size=0.2, stratify=True, scale=False, pca=False,
     X_test_final = pd.concat([X_test_pca, X_test_excluded], axis=1)
 
     return X_train_final, X_test_final, y_train, y_test, scaler, pca_model
-
-    """
-    Splits a DataFrame into train and test sets with optional scaling and PCA.
-
-    Parameters:
-    - df (pd.DataFrame): Input dataset
-    - target (str): Name of target column
-    - test_size (float): Test set proportion
-    - stratify (bool): Whether to stratify on the target column
-    - scale (bool): Whether to standardize features
-    - pca (bool): Whether to apply PCA
-    - pca_variance (float): Variance to retain in PCA (default 0.95)
-
-    Returns:
-    - X_train, X_test, y_train, y_test (np.ndarrays)
-    - Optionally: fitted scaler and PCA model for inverse transforms
-    """
-
-    # Separate features and target
-    X = df.drop(columns=[target])
-    y = df[target]
-
-    # Stratify flag
-    stratify_col = y if stratify else None
-
-    # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, stratify=stratify_col, random_state=42
-    )
-
-    # Optional: scale
-    if scale:
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-
-    return X_train, X_test, y_train, y_test
 
 def train_model(X_train, y_train, X_test=None, y_test=None, model_name='logistic', random_state=42):
     """
@@ -256,50 +243,6 @@ def train_model(X_train, y_train, X_test=None, y_test=None, model_name='logistic
 
     return model, metrics
 
-def find_best_k_for_knn_imputer(df, columns_to_impute, k_range=range(1, 20), sample_frac=0.2, random_state=42):
-    """
-    Finds the best k for KNNImputer using the elbow method based on simulated missing values.
-
-    Parameters:
-    - df: DataFrame with original data
-    - columns_to_impute: list of columns to perform KNN imputation on
-    - k_range: range of k values to test (default: 1 to 20)
-    - sample_frac: fraction of complete rows to artificially remove values from for testing
-    - random_state: reproducibility
-
-    Returns:
-    - DataFrame of k values and corresponding MSE
-    """
-    df_copy = df.copy()
-
-    # Remove rows with actual missing values in those columns
-    df_no_na = df_copy.dropna(subset=columns_to_impute)
-
-    # Sample a portion to simulate missingness
-    sampled = df_no_na.sample(frac=sample_frac, random_state=random_state)
-    df_with_simulated_na = df_copy.copy()
-    df_with_simulated_na.loc[sampled.index, columns_to_impute] = np.nan
-
-    errors = []
-
-    for k in k_range:
-        imputer = KNNImputer(n_neighbors=k)
-        imputed = imputer.fit_transform(df_with_simulated_na[columns_to_impute])
-        mse = mean_squared_error(sampled[columns_to_impute], imputed[sampled.index])
-        errors.append(mse)
-
-    # Plot elbow
-    plt.figure(figsize=(8, 5))
-    plt.plot(list(k_range), errors, marker='o')
-    plt.title('Elbow Method for Optimal k in KNN Imputer')
-    plt.xlabel('n_neighbors')
-    plt.ylabel('MSE on Simulated Missing Data')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-    return pd.DataFrame({'k': list(k_range), 'mse': errors})
-
 def tune_model_with_gridsearch(X, y, model_type='xgboost', cv=5, scoring='f1', verbose=1):
     """
     Performs GridSearchCV to optimize hyperparameters for XGBoost or LightGBM.
@@ -308,7 +251,7 @@ def tune_model_with_gridsearch(X, y, model_type='xgboost', cv=5, scoring='f1', v
     - X, y: Features and target
     - model_type: 'xgboost' or 'lightgbm'
     - cv: Number of cross-validation folds
-    - scoring: Metric to optimize (e.g. 'f1', 'roc_auc')
+    - scoring: Metric to optimize (e.g. 'f1', 'roc_auc', 'recall' which is ideal for churn preds)
     - verbose: Verbosity level
 
     Returns:
@@ -342,12 +285,22 @@ def tune_model_with_gridsearch(X, y, model_type='xgboost', cv=5, scoring='f1', v
             'class_weight': [None, 'balanced']
         }
     elif model_type == 'decision_tree':
-        model = DecisionTreeClassifier(random_state=42)
+        model = DecisionTreeClassifier(random_state=42, criterion='gini')
         param_grid = {
             'max_depth': [3, 5, 10, None],
             'min_samples_split': [2, 5, 10],
             'min_samples_leaf': [1, 2, 4],
             'class_weight': [None, 'balanced']  # handles class imbalance
+        }
+    elif model_type == 'logistic':
+        model = LogisticRegression(random_state=42)
+        param_grid = {
+            'penalty': ['l1', 'l2', 'elasticnet', 'none'],  
+            'C': [0.001, 0.01, 0.1, 1, 10, 100],            
+            'solver': ['liblinear', 'saga'],                
+            'l1_ratio': [0, 0.5, 1],                         
+            'class_weight': [None, 'balanced'],             
+        'max_iter': [100, 500, 1000]                     
         }
     else:
         raise ValueError("Invalid model_type. Choose 'xgboost' or 'lightgbm'.")
@@ -384,3 +337,48 @@ def calculate_lift_scores(y_true, y_proba, positive_label=1, cutoffs=[0.05, 0.10
         lift_scores[f'lift_at_top_{int(pct*100)}%'] = round(lift, 3)
 
     return lift_scores
+
+from sklearn.metrics import classification_report
+
+def run_multiple_classifiers(X_train, X_test, y_train, y_test, model_list, threshold=0.5, lift_cutoffs=[0.1]):
+    """
+    Trains multiple models and returns a DataFrame of performance metrics including lift.
+    
+    Parameters:
+    - model_list: List of tuples (name, model_object)
+    - X_train, X_test, y_train, y_test: split data
+    - threshold: Classification threshold
+    - lift_cutoffs: List of cutoffs to calculate lift (e.g., [0.1, 0.2])
+    
+    Returns:
+    - DataFrame of metrics
+    """
+    results = []
+    fitted_models = {}
+
+    for name, model in model_list:
+        model.fit(X_train, y_train)
+        fitted_models[name] = model
+
+        if hasattr(model, "predict_proba"):
+            y_proba = model.predict_proba(X_test)[:, 1]
+        else:
+            y_proba = model.decision_function(X_test)
+            y_proba = (y_proba - y_proba.min()) / (y_proba.max() - y_proba.min())  # normalize to [0,1]
+
+        # Apply custom threshold
+        y_pred = (y_proba >= threshold).astype(int)
+        report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+        lift = calculate_lift_scores(y_test, y_proba, cutoffs=lift_cutoffs)
+
+        result = {
+            'model': name,
+            'precision': round(report['1']['precision'], 3),
+            'recall': round(report['1']['recall'], 3),
+            'f1_score': round(report['1']['f1-score'], 3)
+        }
+        result.update(lift)
+
+        results.append(result)
+
+    return pd.DataFrame(results), fitted_models
